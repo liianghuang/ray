@@ -17,7 +17,7 @@ from ray._private.state_api_test_utils import (
 )
 from ray.util.state import get_job
 from ray.dashboard.modules.job.pydantic_models import JobDetails
-from ray.util.state.common import Humanify
+from ray.util.state.common import Humanify, StateResource
 import yaml
 from click.testing import CliRunner
 
@@ -3729,6 +3729,20 @@ def test_hang_driver_has_no_is_running_task(monkeypatch, ray_start_cluster):
     all_job_info = client.get_all_job_info()
     assert list(all_job_info.keys()) == [my_job_id]
     assert not all_job_info[my_job_id].HasField("is_running_tasks")
+
+
+def test_invalid_filter_enum_value():
+    """
+    Test the behvior like ray list tasks -f state=ALIVE should throw an error of Error: Invalid value 'ALIVE' for field 'state'.
+    """
+    client = StateDataSourceClient()
+
+    options = ListApiOptions(
+        filters=[("state", "=", "ALIVE")], limit=10  # "ALIVE" is invalid for `tasks`
+    )
+
+    with pytest.raises(ValueError, match=r"Invalid value 'ALIVE' for field 'state'"):
+        client.list(StateResource.TASKS, options)
 
 
 if __name__ == "__main__":

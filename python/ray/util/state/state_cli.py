@@ -562,7 +562,6 @@ def ray_list(
         filters=filter,
         detail=detail,
     )
-
     # If errors occur, exceptions will be thrown. Empty data indicate successful query.
     try:
         data = client.list(

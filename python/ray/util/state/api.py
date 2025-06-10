@@ -5,7 +5,8 @@ import warnings
 from contextlib import contextmanager
 from dataclasses import fields
 from typing import Any, Dict, Generator, List, Optional, Tuple, Union
-
+from enum import Enum
+from typing import get_args, get_origin, Literal
 import requests
 
 import ray
@@ -36,6 +37,7 @@ from ray.util.state.common import (
     TaskState,
     WorkerState,
     dict_to_state,
+    resource_to_schema,
 )
 from ray.util.state.exception import RayStateApiException, ServerUnavailable
 
@@ -147,8 +149,11 @@ class StateApiClient(SubmissionClient):
         )
 
     @classmethod
-    def _make_param(cls, options: Union[ListApiOptions, GetApiOptions]) -> Dict:
+    def _make_param(
+        cls, resource: str, options: Union[ListApiOptions, GetApiOptions]
+    ) -> Dict:
         options_dict = {}
+        schema_cls = resource_to_schema(resource)
         for field in fields(options):
             # TODO(rickyyx): We will need to find a way to pass server side timeout
             # TODO(rickyyx): We will have to convert filter option
@@ -160,12 +165,33 @@ class StateApiClient(SubmissionClient):
                 options_dict["filter_predicates"] = []
                 options_dict["filter_values"] = []
                 for filter in options.filters:
-                    if len(filter) != 3:
-                        raise ValueError(
-                            f"The given filter has incorrect input type, {filter}. "
-                            "Provide (key, predicate, value) tuples."
-                        )
                     filter_k, filter_predicate, filter_val = filter
+
+                    schema_cls = TaskState  # Choose based on resource
+                    matching_fields = {f.name: f.type for f in fields(schema_cls)}
+                    expected_type = matching_fields.get(filter_k)
+
+                    if expected_type is not None:
+                        if get_origin(expected_type) is Literal:
+                            allowed_values = get_args(expected_type)
+                            if filter_val not in allowed_values:
+                                raise RayStateApiException(
+                                    f"Invalid value '{filter_val}' for field '{filter_k}'. "
+                                    f"Expected one of: {', '.join(map(str, allowed_values))}"
+                                )
+
+                        elif isinstance(expected_type, type) and issubclass(
+                            expected_type, Enum
+                        ):
+                            try:
+                                expected_type(filter_val)
+                            except ValueError:
+                                valid_vals = ", ".join([e.name for e in expected_type])
+                                raise RayStateApiException(
+                                    f"Invalid value '{filter_val}' for field '{filter_k}'. "
+                                    f"Expected one of: {valid_vals}"
+                                )
+
                     options_dict["filter_keys"].append(filter_k)
                     options_dict["filter_predicates"].append(filter_predicate)
                     options_dict["filter_values"].append(filter_val)
@@ -281,7 +307,7 @@ class StateApiClient(SubmissionClient):
 
         """
         # TODO(rickyyx): Make GET not using filters on list operation
-        params = self._make_param(options)
+        params = self._make_param(resource, options)
 
         RESOURCE_ID_KEY_NAME = {
             StateResource.NODES: "node_id",
@@ -491,7 +517,7 @@ class StateApiClient(SubmissionClient):
             return []
 
         endpoint = f"/api/v0/{resource.value}"
-        params = self._make_param(options)
+        params = self._make_param(resource, options)
         list_api_response = self._make_http_get_request(
             endpoint=endpoint,
             params=params,
